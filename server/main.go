@@ -59,13 +59,18 @@ func cotacaoHandler(w http.ResponseWriter, r *http.Request) {
 
 	var cotacao common.Cotacao
 	mainChan := make(chan bool)
-	mainContext := r.Context()
+	mainCtx := r.Context()
 
 	go func() {
 
 		ctx, cancel := context.WithTimeout(context.Background(), API_DEADLINE*time.Millisecond)
 		defer cancel()
 
+		//
+		// Nota de esclarecimento:
+		// Se sair da go routine por causa de algum return ou panic,
+		// faz com que o processo termine smoothly e não fique parado lá no select{}
+		//
 		defer func() { mainChan <- false }()
 
 		req, err := http.NewRequestWithContext(ctx, "GET", URL, nil)
@@ -129,7 +134,7 @@ func cotacaoHandler(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(cotacao)
 		}
-	case <-mainContext.Done():
+	case <-mainCtx.Done():
 		log.Println("Connection closed by remote host")
 	}
 
