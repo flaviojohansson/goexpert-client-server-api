@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"log"
@@ -12,10 +13,29 @@ import (
 	"time"
 
 	"github.com/flaviojohansson/goexpert-client-server-api/common"
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/valyala/fastjson"
 )
 
+var db *sql.DB
+
+func initDB() *sql.DB {
+	db, err := sql.Open("sqlite3", "./cotacao.db")
+	if err != nil {
+		log.Fatal(err)
+	}
+	sqlStmt := "CREATE TABLE IF NOT EXISTS cotacao (dtCotacao datetime, cotacao text)"
+	_, err = db.Exec(sqlStmt)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return db
+}
+
 func main() {
+	db = initDB()
+	defer db.Close()
+
 	mux := http.NewServeMux()
 
 	mux.HandleFunc("GET /cotacao", cotacaoHandler)
@@ -37,7 +57,7 @@ func main() {
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM, syscall.SIGINT)
 	<-stop
 
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 
 	log.Println("Shutting down server ...")
@@ -55,7 +75,7 @@ func cotacaoHandler(w http.ResponseWriter, r *http.Request) {
 
 	const URL = "https://economia.awesomeapi.com.br/json/last/USD-BRL"
 	const API_DEADLINE = 200 //ms
-	// const DB_DEADLINE = 20 //ms
+	const DB_DEADLINE = 10   //ms
 
 	var cotacao common.Cotacao
 	mainChan := make(chan bool)
@@ -120,11 +140,22 @@ func cotacaoHandler(w http.ResponseWriter, r *http.Request) {
 			log.Panicf("Parsing JSON error %v\n", err)
 		}
 
+		DBctx, DBcancel := context.WithTimeout(context.Background(), DB_DEADLINE*time.Millisecond)
+		defer DBcancel()
+		stmt, err := db.Prepare("INSERT INTO cotacao (dtCotacao, cotacao) VALUES (?, ?)")
+		if err != nil {
+			log.Panicf("DB Prepare error: %v\n", err)
+		}
+		defer stmt.Close()
+		_, err = stmt.ExecContext(DBctx, time.Now(), cotacao.Bid)
+		if err != nil {
+			log.Printf("DB Exec error: %v\n", err)
+			w.WriteHeader(http.StatusGatewayTimeout)
+			return
+		}
+
+		// chegou aqui, tudo na paz
 		mainChan <- true
-
-		// TODO Gravar em banco de dados
-		// contect timeout: 10 ms
-
 	}()
 
 	select {
